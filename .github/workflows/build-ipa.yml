@@ -11,6 +11,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Download YbridOpus
+        run: |
+          mkdir -p ../Downloads
+          cd ../Downloads
+          curl -L -o YbridOpus.xcframework.zip https://github.com/ybrid/opus-swift/releases/download/0.8.0/YbridOpus.xcframework.zip
+          unzip YbridOpus.xcframework.zip
+          ls -la
+
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.app
 
