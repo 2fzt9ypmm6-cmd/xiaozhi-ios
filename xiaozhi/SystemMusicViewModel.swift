@@ -9,7 +9,6 @@ import SwiftUI
 import MediaPlayer
 import Combine
 
-@MainActor
 class SystemMusicViewModel: ObservableObject {
     
     // ✅ 单例：让全局都能访问同一个播放器实例
@@ -41,7 +40,7 @@ class SystemMusicViewModel: ObservableObject {
     func setupPermissions() {
         MPMediaLibrary.requestAuthorization { status in
             if status == .authorized {
-                Task { @MainActor in
+                DispatchQueue.main.async {
                     self.updateCurrentItem()
                 }
             }
@@ -56,16 +55,15 @@ class SystemMusicViewModel: ObservableObject {
         NotificationCenter.default.addObserver(self, selector: #selector(handleItemChange), name: .MPMusicPlayerControllerNowPlayingItemDidChange, object: player)
     }
     
-    nonisolated @objc func handleStateChange() {
-        // 通知可能在任意线程到达；定时器与 UI 状态统一回主线程处理
-        Task { @MainActor in
+    @objc func handleStateChange() {
+        DispatchQueue.main.async {
             self.isPlaying = (self.player.playbackState == .playing)
             if self.isPlaying { self.startTimer() } else { self.stopTimer() }
         }
     }
     
-    nonisolated @objc func handleItemChange() {
-        Task { @MainActor in
+    @objc func handleItemChange() {
+        DispatchQueue.main.async {
             self.updateCurrentItem()
         }
     }

@@ -30,7 +30,6 @@ enum ActiveSheet: Identifiable {
     var id: Int { hashValue }
 }
 
-@MainActor
 class ChatViewModel: ObservableObject {
     
     // ----------------------------------------------------------------
@@ -130,12 +129,10 @@ class ChatViewModel: ObservableObject {
         
         // 音频回调: 只有在 listening 状态下才发送音频
         audioService.onOpusPacket = { [weak self] opusData in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                // print(">>> Audio Packet: \(opusData.count) bytes")
-                if self.appState == .listening || self.isInjectingVoice {
-                    self.webSocketManager.sendAudio(data: opusData)
-                }
+            guard let self = self else { return }
+            // print(">>> Audio Packet: \(opusData.count) bytes")
+            if self.appState == .listening || self.isInjectingVoice {
+                self.webSocketManager.sendAudio(data: opusData)
             }
         }
         
@@ -298,14 +295,12 @@ class ChatViewModel: ObservableObject {
         
         // 2. 重置音频回调 (确保回调闭包里的 self 是正确的)
         audioService.onOpusPacket = { [weak self] opusData in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                if self.isSystemSpeaking { return }
-                
-                // 仅在监听状态发送数据
-                if self.appState == .listening || self.isInjectingVoice {
-                    self.webSocketManager.sendAudio(data: opusData)
-                }
+            guard let self = self else { return }
+            if self.isSystemSpeaking { return }
+            
+            // 仅在监听状态发送数据
+            if self.appState == .listening || self.isInjectingVoice {
+                self.webSocketManager.sendAudio(data: opusData)
             }
         }
         
@@ -505,15 +500,17 @@ class ChatViewModel: ObservableObject {
                 mcpManager.sendError(id: reqId, sessionId: sid, message: "Error: \(error.localizedDescription)")
             }
             
-            self.showPublishSheet = false
+            await MainActor.run { self.showPublishSheet = false }
             resetMcpState()
         }
     }
     
     // 旅行规划 (Triggered by Text)
     func performTravelPlanning(query: String) async {
-        self.activeSheet = nil
-        self.speakLocally(text: "收到，正在为您生成详细攻略，请稍候...")
+        await MainActor.run {
+            self.activeSheet = nil
+            self.speakLocally(text: "收到，正在为您生成详细攻略，请稍候...")
+        }
         
         do {
             let taskId = try await TravelService.submitPlan(query: query)
@@ -524,9 +521,11 @@ class ChatViewModel: ObservableObject {
             while attempts < 60 {
                 try await Task.sleep(nanoseconds: 3 * 1_000_000_000)
                 if let html = try? await TravelService.checkStatus(taskId: taskId) {
-                    self.generatedHtml = html
-                    self.activeSheet = .htmlResult
-                    self.speakLocally(text: "攻略已生成，请查看。")
+                    await MainActor.run {
+                        self.generatedHtml = html
+                        self.activeSheet = .htmlResult
+                        self.speakLocally(text: "攻略已生成，请查看。")
+                    }
                     return
                 }
                 attempts += 1
@@ -538,13 +537,15 @@ class ChatViewModel: ObservableObject {
     
     // 小红书详情
     func fetchNoteDetail(feedId: String, xsecToken: String) async {
-        self.speakLocally(text: "正在加载详情...")
+        await MainActor.run { self.speakLocally(text: "正在加载详情...") }
         do {
             if let detail = try await XHSService.fetchDetail(feedId: feedId, xsecToken: xsecToken) {
-                self.selectedNoteDetail = detail
-                self.activeSheet = .xhsPublish // 复用 Publish Sheet 还是 NoteDetail Sheet 看你 UI
-                // 这里假设你有单独的 Note Detail UI
-                self.showNoteDetail = true
+                await MainActor.run {
+                    self.selectedNoteDetail = detail
+                    self.activeSheet = .xhsPublish // 复用 Publish Sheet 还是 NoteDetail Sheet 看你 UI
+                    // 这里假设你有单独的 Note Detail UI
+                    self.showNoteDetail = true
+                }
             }
         } catch {
             print("Detail failed")
@@ -570,34 +571,33 @@ class ChatViewModel: ObservableObject {
 
 extension ChatViewModel: WebSocketManagerDelegate {
     
-    nonisolated func webSocketDidConnect() {
+    func webSocketDidConnect() {
         print("WS Connected")
     }
     
-    nonisolated func webSocketDidDisconnect(reason: String) {
-        // WebSocketManager 内部已用 DispatchQueue.main 回调，可安全断言主线程
-        MainActor.assumeIsolated {
-            guard appState != .awaitingActivation else { return }
-            print(">>> ⚠️ [WS] Disconnected: \(reason). Resetting audio state.")
-            self.appState = .connectionFailed
-            
-            // ✅ 新增：断开连接时，强制停止录音和播放，重置引擎状态
-            self.audioService.stopRecording()
-            self.audioService.stopPlaying()
-            self.isLocalSpeaking = false
-        }
-    }
-    
-    nonisolated func webSocketDidReceiveError(error: Error) {
-        MainActor.assumeIsolated {
-            if appState != .awaitingActivation {
+    func webSocketDidDisconnect(reason: String) {
+        if appState != .awaitingActivation {
+//            DispatchQueue.main.async { self.appState = .connectionFailed }
+            DispatchQueue.main.async {
+                print(">>> ⚠️ [WS] Disconnected: \(reason). Resetting audio state.")
                 self.appState = .connectionFailed
+                
+                // ✅ 新增：断开连接时，强制停止录音和播放，重置引擎状态
+                self.audioService.stopRecording()
+                self.audioService.stopPlaying()
+                self.isLocalSpeaking = false
             }
         }
     }
     
-    nonisolated func webSocketDidReceiveHello(sessionId: String) {
-        MainActor.assumeIsolated {
+    func webSocketDidReceiveError(error: Error) {
+        if appState != .awaitingActivation {
+            DispatchQueue.main.async { self.appState = .connectionFailed }
+        }
+    }
+    
+    func webSocketDidReceiveHello(sessionId: String) {
+        DispatchQueue.main.async {
             print(">>> ✅ [WS] Session Established: \(sessionId)")
             self.currentSessionId = sessionId
             
@@ -620,42 +620,44 @@ extension ChatViewModel: WebSocketManagerDelegate {
         }
     }
     
-    nonisolated func webSocketDidReceiveAudio(data: Data) {
-        MainActor.assumeIsolated {
-            // 添加调试日志：看看是否真的收到了音频数据
-            print(">>> 🎤 [Audio] Received \(data.count) bytes. Current State: \(appState)")
-            
-            if isLocalSpeaking {
-                print(">>> ❌ [Audio] Blocked by local speaking")
-                return
-            } // 本地播报时不被打断
-            
-            // 1. 🚨 核心修复：如果在录音，必须立刻停止，否则播放声音极小或没有
-            if audioService.isRecording {
-                print(">>> 🛑 暂停录音，优先播放 AI 回复")
-                audioService.stopRecording()
-            }
-            
-            // 🔍 哨兵日志 2：检查是否被拦截
-            if appState == .listening {
-                print(">>> ❌ [Audio] Blocked because state is listening!")
-                // 🚨 尝试在这里强制修正状态，死马当活马医
+    func webSocketDidReceiveAudio(data: Data) {
+        // 添加调试日志：看看是否真的收到了音频数据
+        print(">>> 🎤 [Audio] Received \(data.count) bytes. Current State: \(appState)")
+        
+        if isLocalSpeaking {
+            print(">>> ❌ [Audio] Blocked by local speaking")
+            return
+        } // 本地播报时不被打断
+        
+        // 1. 🚨 核心修复：如果在录音，必须立刻停止，否则播放声音极小或没有
+        if audioService.isRecording {
+            print(">>> 🛑 暂停录音，优先播放 AI 回复")
+            audioService.stopRecording()
+        }
+        
+        // 🔍 哨兵日志 2：检查是否被拦截
+        if appState == .listening {
+            print(">>> ❌ [Audio] Blocked because state is listening!")
+            // 🚨 尝试在这里强制修正状态，死马当活马医
+            DispatchQueue.main.async { self.appState = .speaking }
+        }
+        
+        // 2. 更新状态，防止其他逻辑干扰
+        DispatchQueue.main.async {
+            if self.appState != .speaking {
+                print(">>> 🔄 [Audio] State changed: \(self.appState) -> speaking")
                 self.appState = .speaking
             }
-            
-            // 2. 更新状态，防止其他逻辑干扰
-            if appState != .speaking {
-                print(">>> 🔄 [Audio] State changed: \(appState) -> speaking")
-                self.appState = .speaking
-            }
-            
+        }
+        
+        if appState == .speaking {
             audioService.play(opusPacket: data)
         }
     }
     
-    nonisolated func webSocketDidReceiveJson(data: [String : Any]) {
-        MainActor.assumeIsolated {
-            handleIncomingMessage(data)
+    func webSocketDidReceiveJson(data: [String : Any]) {
+        DispatchQueue.main.async {
+            self.handleIncomingMessage(data)
         }
     }
     
@@ -683,11 +685,17 @@ extension ChatViewModel: WebSocketManagerDelegate {
                 
                 // 简单的关键词拦截
                 if text.contains("播放本地音乐") || text.contains("播放音乐") {
-                    SystemMusicViewModel.shared.togglePlayPause() // 播放
+                    DispatchQueue.main.async {
+                        SystemMusicViewModel.shared.togglePlayPause() // 播放
+                    }
                 } else if text.contains("下一首") {
-                    SystemMusicViewModel.shared.nextTrack()
+                    DispatchQueue.main.async {
+                        SystemMusicViewModel.shared.nextTrack()
+                    }
                 } else if text.contains("暂停播放") {
-                    SystemMusicViewModel.shared.togglePlayPause() // 暂停
+                    DispatchQueue.main.async {
+                        SystemMusicViewModel.shared.togglePlayPause() // 暂停
+                    }
                 }
                 
                 // 更新气泡
@@ -761,8 +769,9 @@ extension ChatViewModel: WebSocketManagerDelegate {
                     print(">>> ✅ AI回复完毕，恢复待机/监听")
                     
                     if isHandsFreeMode {
-                        // 已在主线程（@MainActor），无需跳转
-                        self.startAutoListening()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            self.startAutoListening()
+                        }
                     } else {
                         self.appState = .idle
                     }
@@ -787,56 +796,51 @@ extension ChatViewModel: WebSocketManagerDelegate {
 
 extension ChatViewModel: MCPManagerDelegate {
     
-    // MCPManager 的 delegate 回调已统一用 MainActor.run 派发，可安全断言主线程
-    
-    nonisolated func mcpDidRequestCamera(requestId: Int, sessionId: String, taskType: VisionTaskType) {
-        MainActor.assumeIsolated {
-            print(">>> Delegate: Camera Requested")
-            
-            self.pendingMcpRequestId = requestId
-            self.pendingMcpSessionId = sessionId
-            self.currentVisionTask = taskType
-            
-            self.audioService.stopPlaying()
-            self.appState = .idle
-            
+    func mcpDidRequestCamera(requestId: Int, sessionId: String, taskType: VisionTaskType) {
+        print(">>> Delegate: Camera Requested")
+        
+        self.pendingMcpRequestId = requestId
+        self.pendingMcpSessionId = sessionId
+        self.currentVisionTask = taskType
+        
+        self.audioService.stopPlaying()
+        self.appState = .idle
+        
+        // 强制主线程弹窗
+        DispatchQueue.main.async {
             self.showCamera = true
         }
     }
     
-    nonisolated func mcpDidRequestXhsPublishPrep(title: String, content: String, requestId: Int, sessionId: String) {
-        MainActor.assumeIsolated {
-            print(">>> Delegate: XHS Publish Prep")
-            self.publishDraftTitle = title
-            self.publishDraftContent = content
-            // 触发拍照
-            mcpDidRequestCamera(requestId: requestId, sessionId: sessionId, taskType: .publishXhs)
-        }
+    func mcpDidRequestXhsPublishPrep(title: String, content: String, requestId: Int, sessionId: String) {
+        print(">>> Delegate: XHS Publish Prep")
+        self.publishDraftTitle = title
+        self.publishDraftContent = content
+        // 触发拍照
+        mcpDidRequestCamera(requestId: requestId, sessionId: sessionId, taskType: .publishXhs)
     }
     
-    nonisolated func mcpDidRequestUpdateUI(sheet: ActiveSheet?, message: String?) {
-        MainActor.assumeIsolated {
+    func mcpDidRequestUpdateUI(sheet: ActiveSheet?, message: String?) {
+        DispatchQueue.main.async {
             if let sheet = sheet { self.activeSheet = sheet }
             if let msg = message { self.speakLocally(text: msg) }
         }
     }
     
-    nonisolated func mcpDidRequestSendFakeUserMessage(text: String) {
-        MainActor.assumeIsolated {
-            guard let sid = currentSessionId else { return }
-            sendJson(["session_id": sid, "type": "text", "text": text])
-        }
+    func mcpDidRequestSendFakeUserMessage(text: String) {
+        guard let sid = currentSessionId else { return }
+        sendJson(["session_id": sid, "type": "text", "text": text])
     }
     
-    nonisolated func mcpDidRequestMapUpdate(pois: [AmapPOI]?, route: AmapRoute?) {
-        MainActor.assumeIsolated {
+    func mcpDidRequestMapUpdate(pois: [AmapPOI]?, route: AmapRoute?) {
+        DispatchQueue.main.async {
             if let pois = pois { self.mapPOIs = pois }
             if let route = route { self.mapRoute = route }
         }
     }
     
-    nonisolated func mcpDidRequestXhsUpdate(feeds: [XhsFeed]) {
-        MainActor.assumeIsolated {
+    func mcpDidRequestXhsUpdate(feeds: [XhsFeed]) {
+        DispatchQueue.main.async {
             self.xhsFeeds = feeds
         }
     }
@@ -848,41 +852,43 @@ extension ChatViewModel: MCPManagerDelegate {
 
 extension ChatViewModel: DouyinManagerDelegate {
     
-    nonisolated func douyinDidReceiveMessage(type: String, user: String, content: String) {
-        MainActor.assumeIsolated {
-            if type == "like" { return }
-            guard isDouyinAutoMode else { return }
-            
-            if appState == .speaking || appState == .connecting || isInjectingVoice { return }
-            
-            let now = Date()
-            if now.timeIntervalSince(lastDouyinProcessTime) < 5.0 { return }
-            lastDouyinProcessTime = now
-            
-            // ✅ 【修正1】清洗数据：去除 "[表情]" 和多余空格
-            let cleanUser = user.replacingOccurrences(of: "[表情]", with: "").trimmingCharacters(in: .whitespaces)
-            let cleanContent = content.replacingOccurrences(of: "[表情]", with: "").trimmingCharacters(in: .whitespaces)
-            
-            // 如果名字被删完了，给个默认名
-            let finalUser = cleanUser.isEmpty ? "观众" : cleanUser
-            
-            print(">>> 🎵 [抖音消息-静默注入] \(finalUser): \(cleanContent)")
-            
+    func douyinDidReceiveMessage(type: String, user: String, content: String) {
+        if type == "like" { return }
+        guard isDouyinAutoMode else { return }
+        
+        if appState == .speaking || appState == .connecting || isInjectingVoice { return }
+        
+        let now = Date()
+        if now.timeIntervalSince(lastDouyinProcessTime) < 5.0 { return }
+        lastDouyinProcessTime = now
+        
+        // ✅ 【修正1】清洗数据：去除 "[表情]" 和多余空格
+        let cleanUser = user.replacingOccurrences(of: "[表情]", with: "").trimmingCharacters(in: .whitespaces)
+        let cleanContent = content.replacingOccurrences(of: "[表情]", with: "").trimmingCharacters(in: .whitespaces)
+        
+        // 如果名字被删完了，给个默认名
+        let finalUser = cleanUser.isEmpty ? "观众" : cleanUser
+        
+        print(">>> 🎵 [抖音消息-静默注入] \(finalUser): \(cleanContent)")
+        
+        DispatchQueue.main.async {
             // UI 显示也用清洗后的
             let displayMsg = "🎵 \(finalUser): \(cleanContent)"
             self.messageList.append(ChatMessage(text: displayMsg, type: .sent))
-            
-            var prompt = ""
-            switch type {
-            case "gift": prompt = "快撒娇感谢！\(finalUser) 的礼物"
-            case "welcome": prompt = "欢迎 \(finalUser) "
-            case "chat":
-                if finalUser == "Unknown" || finalUser == "未知用户" { return }
-                prompt = "观众 \(finalUser) 说：\(cleanContent)"
-            default: return
-            }
-            
-            injectVoiceCommand(text: prompt)
+        }
+        
+        var prompt = ""
+        switch type {
+        case "gift": prompt = "快撒娇感谢！\(finalUser) 的礼物"
+        case "welcome": prompt = "欢迎 \(finalUser) "
+        case "chat":
+            if finalUser == "Unknown" || finalUser == "未知用户" { return }
+            prompt = "观众 \(finalUser) 说：\(cleanContent)"
+        default: return
+        }
+        
+        DispatchQueue.main.async {
+            self.injectVoiceCommand(text: prompt)
         }
     }
     

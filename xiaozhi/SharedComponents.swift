@@ -13,7 +13,6 @@ import UIKit
 // ----------------------------------------------------------------
 // 1. 音量监听器 (保持不变)
 // ----------------------------------------------------------------
-@MainActor
 class AudioVolumeMonitor: ObservableObject {
     @Published var volume: Float = 0.0
     
