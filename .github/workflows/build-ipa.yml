@@ -13,8 +13,8 @@ jobs:
 
       - name: Download YbridOpus
         run: |
-          mkdir -p ../Downloads
-          cd ../Downloads
+          mkdir -p ../../Downloads
+          cd ../../Downloads
           curl -L -o YbridOpus.xcframework.zip https://github.com/ybrid/opus-swift/releases/download/0.8.0/YbridOpus.xcframework.zip
           unzip YbridOpus.xcframework.zip
           ls -la
