@@ -26,7 +26,7 @@ struct ContentView: View {
                         .padding()
                     }
                     // 修正 onChange 语法 (兼容 iOS 14+)
-                    .onChange(of: viewModel.messageList.last?.text) { _ in
+                    .onChange(of: viewModel.messageList.last?.text) { _, _ in
                         if let lastId = viewModel.messageList.last?.id {
                             // 加上动画，让用户感觉到内容在变长
                             withAnimation(.easeOut(duration: 0.2)) {

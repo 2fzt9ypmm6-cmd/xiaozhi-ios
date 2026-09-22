@@ -387,7 +387,7 @@ struct MusicPlayerCard: View {
                 )
         )
         // 唱片旋转动画
-        .onChange(of: vm.isPlaying) { isPlaying in
+        .onChange(of: vm.isPlaying) { _, isPlaying in
             if isPlaying {
                 withAnimation(.linear(duration: 4).repeatForever(autoreverses: false)) {
                     rotation = 360

@@ -46,17 +46,21 @@ class AudioService {
         // ✅ 监听系统路由变化 (一旦系统切回听筒，我们马上切回来)
         NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange), name: AVAudioSession.routeChangeNotification, object: nil)
         
-        Task.detached(priority: .userInitiated) {
+        // 类已 @MainActor 隔离：用 Task 继承主 actor，避免 detached 捕获 self 的并发告警
+        Task(priority: .userInitiated) {
             await self.setupAndStartEngine()
         }
     }
     
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        // deinit 运行在非隔离上下文，不能触碰主 actor 隔离状态；
+        // 用 nonisolated(unsafe) 明确告知编译器该访问是安全的。
+        nonisolated(unsafe) let center = NotificationCenter.default
+        center.removeObserver(self)
     }
     
     // ✅ 路由守卫：系统改了路由，我们再改回来
-    @objc private func handleRouteChange(notification: Notification) {
+    nonisolated @objc private func handleRouteChange(notification: Notification) {
         guard let userInfo = notification.userInfo,
               let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
@@ -140,7 +144,7 @@ class AudioService {
     }
     
     // ✅ 强力切扬声器
-    func forceSpeaker() {
+    nonisolated func forceSpeaker() {
         let session = AVAudioSession.sharedInstance()
         
         // 1. 如果已经有耳机/蓝牙连接，不要强制切扬声器，否则用户体验很差
@@ -161,7 +165,7 @@ class AudioService {
         }
     }
     
-    func checkMicrophonePermission() async -> Bool {
+    nonisolated func checkMicrophonePermission() async -> Bool {
         let status = AVAudioApplication.shared.recordPermission
         switch status {
         case .granted: return true
@@ -172,7 +176,9 @@ class AudioService {
     }
     
     // MARK: - 录音
-    func startRecording() {
+    /// `@MainActor` 隔离的方法仍需从音频线程（tap 回调）访问本方法，
+    /// 故显式标记为 `nonisolated`，避免 Swift 6 并发检查报错。
+    nonisolated func startRecording() {
         if !engine.isRunning { try? engine.start() }
         guard !isRecording else { return }
         
@@ -225,7 +231,7 @@ class AudioService {
         isRecording = true
     }
     
-    func stopRecording() {
+    nonisolated func stopRecording() {
         guard isRecording else { return }
         isRecording = false
         engine.inputNode.removeTap(onBus: 0)
@@ -236,7 +242,7 @@ class AudioService {
     }
     
     // MARK: - 播放
-    func prepareToPlay() {
+    nonisolated func prepareToPlay() {
         if !engine.isRunning { try? engine.start() }
         guard !isPlaying else { return }
         
@@ -246,7 +252,7 @@ class AudioService {
         isPlaying = true
     }
 
-    func play(opusPacket: Data) {
+    nonisolated func play(opusPacket: Data) {
         guard isPlaying, let decoder = opusDecoder, let targetFormat = engineProcessingFormat else { return }
         
         let maxFrameSize = Int(playbackSampleRate * 0.120)
@@ -293,7 +299,7 @@ class AudioService {
         }
     }
 
-    func stopPlaying() {
+    nonisolated func stopPlaying() {
         guard isPlaying else { return }
         isPlaying = false
         player.stop()
@@ -304,7 +310,7 @@ class AudioService {
         }
     }
     
-    func resetEngine() {
+    nonisolated func resetEngine() {
         stopRecording()
         stopPlaying()
         engine.stop()
@@ -312,7 +318,7 @@ class AudioService {
     }
     
     // (保留注入编码器相关方法...)
-    func prepareInjectionEncoder() {
+    nonisolated func prepareInjectionEncoder() {
         if injectionEncoder == nil {
             var opusError: opus_int32 = 0
             injectionEncoder = opus_encoder_create(opus_int32(recordingSampleRate), 1, OPUS_APPLICATION_VOIP, &opusError)
@@ -322,7 +328,7 @@ class AudioService {
         injectionConverter = nil
     }
     
-    func destroyInjectionEncoder() {
+    nonisolated func destroyInjectionEncoder() {
         if let encoder = injectionEncoder {
             opus_encoder_destroy(encoder)
             injectionEncoder = nil
@@ -331,7 +337,7 @@ class AudioService {
         injectionConverter = nil
     }
     
-    func encodeAndSendInjectionBuffer(_ inputBuffer: AVAudioPCMBuffer) {
+    nonisolated func encodeAndSendInjectionBuffer(_ inputBuffer: AVAudioPCMBuffer) {
         guard let encoder = injectionEncoder else { return }
         if inputBuffer.frameLength == 0 { return }
         if injectionConverter == nil || injectionConverter?.inputFormat != inputBuffer.format {

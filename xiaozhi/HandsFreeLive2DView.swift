@@ -100,7 +100,7 @@ struct HandsFreeLive2DView: View {
                     }
                     .frame(maxHeight: 280)
                     .mask(LinearGradient(colors: [.clear, .black, .black], startPoint: .top, endPoint: .bottom))
-                    .onChange(of: chatVM.messageList.count) { _ in
+                    .onChange(of: chatVM.messageList.count) { _, _ in
                         if let last = chatVM.messageList.last {
                             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
@@ -363,7 +363,7 @@ struct BlinkModifier: ViewModifier {
                     }
                 }
             }
-            .onChange(of: shouldBlink) { newValue in
+            .onChange(of: shouldBlink) { _, newValue in
                 if newValue {
                     withAnimation(.easeInOut(duration: 0.8).repeatForever()) {
                         isOn = true

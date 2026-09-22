@@ -8,7 +8,9 @@
 // 文件: WebResultView.swift
 
 import SwiftUI
-import WebKit
+// WKWebView / WKWebViewConfiguration 等类型未标注 Sendable，
+// 用 @preconcurrency 抑制 Swift 6 并发检查的 sendability 警告。
+@preconcurrency import WebKit
 
 struct WebResultView: View {
     let htmlContent: String
